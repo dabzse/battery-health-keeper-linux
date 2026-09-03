@@ -1,0 +1,50 @@
+# Battery Health Keeper English strings
+# Format: key=value
+# Copy this file to lang/<language>.lang and update the values when adding a language.
+
+app.title=Battery Health Keeper
+app.subtitle=Set maximum battery charge limit.
+
+ui.hardware=Hardware
+ui.no_battery=No battery detected
+ui.thresholds_writable=thresholds writable
+ui.read_only=read-only
+ui.battery_type=Battery type
+ui.charging_cycles=Charge cycles (total)
+ui.full_capacity=Full capacity
+ui.design_capacity=design
+ui.charge_limit=Charge limit (%)
+ui.current_limit=Active limit
+ui.language=Language
+ui.version=Version
+ui.linux_note=Linux note: changing charge thresholds may require elevated permissions and kernel/firmware support.
+
+button.apply=Apply limit
+button.reset=Reset to 100%
+button.save=Save settings
+button.load=Load settings
+button.refresh=Refresh hardware
+
+ui.unavailable=N/A
+
+status.ready=Ready
+status.no_battery=No battery found. On Linux, battery control uses /sys/class/power_supply/.
+status.thresholds_readonly=Battery found, but its charge thresholds are not writable.
+status.battery_detected=battery detected
+status.limit_applied=Charge limit applied
+status.reset_applied=Charge limit reset to 100%
+status.settings_saved=Settings saved to
+status.settings_save_error=Could not save settings
+status.settings_loaded=Settings loaded from
+status.settings_load_error=Could not load settings
+status.settings_missing=No saved settings file exists yet.
+status.language_changed=Language changed
+status.charging=charging
+status.discharging=discharging
+status.threshold_error=Could not set thresholds
+status.permission_denied=Permission denied. Grant access to the battery threshold files or run the app with the required permissions.
+battery.status.charging=charging
+battery.status.discharging=discharging
+battery.status.not_charging=not charging
+battery.status.full=full
+battery.status.unknown=unknown

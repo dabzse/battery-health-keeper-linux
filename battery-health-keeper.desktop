@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Battery Health Keeper
+Comment=A simple battery health keeper for Linux
+Exec=battery-health-keeper
+Icon=battery-health-keeper
+Terminal=false
+Type=Application
+Categories=Utility;Settings;HardwareSettings;
+StartupWMClass=battery-health-keeper

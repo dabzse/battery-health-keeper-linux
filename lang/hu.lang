@@ -1,0 +1,49 @@
+# Battery Health Keeper magyar nyelv
+# Formátum: kulcs=érték
+
+app.title=Akkumulátor egészségmegőrző
+app.subtitle=Akkumulátor maximális töltési korlátjának beállítása.
+
+ui.hardware=Hardver
+ui.no_battery=Nincs észlelt akkumulátor
+ui.thresholds_writable=írható küszöbértékek
+ui.read_only=csak olvasható
+ui.battery_type=Akkumulátor típusa
+ui.charging_cycles=Töltési ciklusok (összesen)
+ui.full_capacity=Teljes kapacitás
+ui.design_capacity=gyári
+ui.charge_limit=Töltési korlát (%)
+ui.current_limit=Aktív korlát
+ui.language=Nyelv
+ui.version=Verzió
+ui.linux_note=Megjegyzés Linuxhoz: a töltési küszöbértékek módosításához emelt jogosultságokra, valamint a rendszermag és a firmware támogatására lehet szükség.
+
+button.apply=Korlát alkalmazása
+button.reset=Visszaállítás 100%-ra
+button.save=Beállítások mentése
+button.load=Beállítások betöltése
+button.refresh=Hardver frissítése
+
+ui.unavailable=N/A
+
+status.ready=Készen áll
+status.no_battery=Nem található akkumulátor. Linux rendszeren az akkumulátor-vezérlés a /sys/class/power_supply/ könyvtárat használja.
+status.thresholds_readonly=Akkumulátor észlelve, de a töltöttségi küszöbértékei nem írhatók.
+status.battery_detected=akkumulátor észlelve
+status.limit_applied=A töltési korlát sikeresen beállítva
+status.reset_applied=A töltési korlát visszaállítva 100%-ra
+status.settings_saved=A beállítások elmentve
+status.settings_save_error=A beállítások mentése nem sikerült
+status.settings_loaded=A beállítások betöltése innen
+status.settings_load_error=A beállítások betöltése nem sikerült
+status.settings_missing=Még nincs mentett beállításfájl.
+status.language_changed=A nyelv megváltozott
+status.charging=töltés
+status.discharging=kisülés
+status.threshold_error=Nem sikerült beállítani a küszöbértékeket
+status.permission_denied=Nincs engedély. Adjon hozzáférést az akkumulátor küszöbértékfájljaihoz, vagy futtassa az alkalmazást a szükséges jogosultságokkal.
+battery.status.charging=töltés
+battery.status.discharging=merülés
+battery.status.not_charging=nem töltődik
+battery.status.full=feltöltve
+battery.status.unknown=ismeretlen
