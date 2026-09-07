@@ -1,0 +1,28 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build
+        run: cargo build --release
+
+      - name: Package
+        run: |
+          mkdir package
+          cp target/release/battery-health-keeper package/
+          tar -cJf battery-health-keeper.tar.xz package/
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: battery-health-keeper.tar.xz
