@@ -18,7 +18,6 @@ changed, using AC
 
 ![changed, using AC](assets/img3.png)
 
-
 The application allows you to set an upper battery charge limit (e.g. 80%) \
 to prolong battery health when working plugged in. Once applied, the hardware \
 stops charging when reaching the limit.
@@ -27,14 +26,14 @@ stops charging when reaching the limit.
 
 - Linux
 - Rust and Cargo
-- A battery driver exposing the charge threshold file:
-  - `/sys/class/power_supply/<battery>/charge_control_end_threshold`
-  - *(Optionally)* `/sys/class/power_supply/<battery>/charge_control_start_threshold`
+- A battery driver exposing a charge threshold file:
+  - Standard: `/sys/class/power_supply/<battery>/charge_control_end_threshold` (and optionally `charge_control_start_threshold`)
+  - Legacy: `/sys/class/power_supply/<battery>/charge_stop_threshold` (and optionally `charge_start_threshold`)
 - Permission to write those files, usually through a udev rule, \
 a privileged service, or an appropriate system configuration.
 
 Many laptops do not expose writable charge thresholds. \
-In that case the app can still open, but it cannot control charging for that device.
+In that case the app can still open and display battery health statistics, but it cannot control charging for that device.
 
 ## Build and Run
 
@@ -139,32 +138,54 @@ cat /sys/class/power_supply/*/type
 
 The app only uses entries whose `type` is `Battery`.
 
-### Battery is detected but read-only
+### Battery is detected but thresholds are not supported
 
-Check for the threshold files:
+Check whether the kernel exposes any threshold files for the battery:
+
+```bash
+ls -l /sys/class/power_supply/<battery>/*threshold* 2>/dev/null
+```
+
+If no threshold files exist, the laptop's hardware, BIOS, or kernel driver does not support charge thresholds via sysfs. Running the application with `sudo` cannot create sysfs files that the kernel driver does not provide.
+
+#### Scenario A: Hardware or manufacturer limitation
+
+Battery charge control in Linux requires explicit kernel driver and ACPI/WMI support from the hardware vendor:
+
+- **Supported**: ThinkPads (`thinkpad_acpi`), ASUS laptops (`asus_wmi`), System76 (`system76_acpi`), Framework laptops, Huawei (`huawei_wmi`), and newer LG Gram laptops (`lg_laptop`).
+- **Often unsupported in standard sysfs**:
+  - **HP laptops**: HP typically manages battery limits ("Battery Care Function") directly inside UEFI/BIOS and does not expose ACPI charge thresholds to Linux sysfs.
+  - **Dell laptops**: Many Dell laptops do not expose `charge_control_end_threshold` under `/sys/class/power_supply`; they use SMBIOS (`dell-laptop` or Dell Command / `smbios-battery-ctl`).
+  - **Lenovo IdeaPad**: Many non-ThinkPad IdeaPads use a simple on/off switch (`conservation_mode` under `ideapad_acpi`, capping at ~60%) instead of an adjustable percentage.
+  - **Acer, Apple MacBooks, Desktops, or Virtual Machines (VMs)**: Do not expose standard sysfs battery charge thresholds.
+
+#### Scenario B: Same machine / missing kernel driver
+
+If charge thresholds work on one distribution (e.g. Debian) but show unsupported on another (e.g. an RPM-based distribution), check if the vendor ACPI/WMI kernel module is loaded:
+
+```bash
+lsmod | grep -E "thinkpad|asus|dell|ideapad|huawei|system76"
+```
+
+Ensure the required vendor platform driver is loaded and not blocked by kernel lockdown or Secure Boot policies.
+
+### Battery is detected but read-only (permission required)
+
+If the threshold files exist (e.g. `/sys/class/power_supply/<battery>/charge_control_end_threshold` or `charge_stop_threshold`) but cannot be written:
 
 ```bash
 ls -l /sys/class/power_supply/<battery>/charge_control_*threshold
 ```
 
-If the files do not exist,
-the laptop driver does not provide the interface used by this application.
+Configure an appropriate udev rule or run the application with the permissions required by your system. Avoid making the entire sysfs tree globally writable.
 
-If the files exist but cannot be written,
-configure an appropriate udev rule or run the application
-with the permissions required by your system.
-Avoid making the entire sysfs tree globally writable.
-
-For a quick diagnostic only,
-you can test whether the current user can write the files:
+For a quick diagnostic only, test whether the current user or `sudo` can write the files:
 
 ```bash
 printf '80' | sudo tee /sys/class/power_supply/<battery>/charge_control_end_threshold
 ```
 
-If these commands return `Permission denied`,
-configure access for the threshold files with your
-distribution's udev or device-permission system.
+If this command succeeds, setting up a udev rule will allow running the application without `sudo`.
 
 ## Tested on
 

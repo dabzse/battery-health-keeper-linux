@@ -182,6 +182,17 @@ struct Settings {
 /// otherwise `charge_full` / `charge_full_design` (µAh).
 ///
 /// `cycle_count` is **total charge cycles so far**, not remaining life.
+/// Status of hardware and permission support for battery charge thresholds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ThresholdSupport {
+    /// No charge limit threshold files exist for this battery (unsupported by hardware or kernel driver).
+    Unsupported,
+    /// Threshold file exists, but cannot be opened for writing (requires root privileges or a udev rule).
+    ReadOnly,
+    /// Threshold file exists and is writable by the current process.
+    Writable,
+}
+
 #[derive(Clone)]
 struct Battery {
     /// Sysfs directory, e.g. `/sys/class/power_supply/BAT0`.
@@ -192,9 +203,15 @@ struct Battery {
     capacity: Option<u8>,
     /// Kernel status string (`Charging`, `Discharging`, …).
     status: String,
-    /// Current `charge_control_end_threshold`, if exposed.
+    /// Current charge threshold, if exposed.
     current_threshold: Option<u8>,
-    /// `true` when `charge_control_end_threshold` exists (not necessarily user-writable).
+    /// Threshold support status: Unsupported, ReadOnly, or Writable.
+    threshold_support: ThresholdSupport,
+    /// Path to end-threshold sysfs file (`charge_control_end_threshold` or `charge_stop_threshold`).
+    end_threshold_path: Option<PathBuf>,
+    /// Path to start-threshold sysfs file (`charge_control_start_threshold` or `charge_start_threshold`).
+    start_threshold_path: Option<PathBuf>,
+    /// Backward-compatibility flag (`true` when threshold is writable).
     writable: bool,
     technology: Option<String>,
     manufacturer: Option<String>,
@@ -318,11 +335,26 @@ impl BatteryHealthKeeperApp {
                     "No battery found. On Linux, battery control uses /sys/class/power_supply.",
                 )
                 .into()
-        } else if self.batteries.iter().all(|battery| !battery.writable) {
+        } else if self
+            .batteries
+            .iter()
+            .all(|b| b.threshold_support == ThresholdSupport::Unsupported)
+        {
             self.language
                 .text(
-                    "status.thresholds_readonly",
-                    "Battery found, but its charge thresholds are not writable.",
+                    "status.thresholds_unsupported",
+                    "Battery found, but charge thresholds are not supported by this hardware or kernel driver.",
+                )
+                .into()
+        } else if self
+            .batteries
+            .iter()
+            .all(|b| b.threshold_support == ThresholdSupport::ReadOnly)
+        {
+            self.language
+                .text(
+                    "status.thresholds_permission_denied",
+                    "Battery found, but write permission is denied. Run with sudo or configure a udev rule.",
                 )
                 .into()
         } else {
@@ -344,13 +376,34 @@ impl BatteryHealthKeeperApp {
 
     /// Write `limit` to every battery that exposes an end-threshold file.
     fn apply_limit(&mut self, limit: u8) {
-        let writable_bats: Vec<_> = self.batteries.iter().filter(|b| b.writable).cloned().collect();
+        if self
+            .batteries
+            .iter()
+            .all(|b| b.threshold_support == ThresholdSupport::Unsupported)
+        {
+            self.message = self
+                .language
+                .text(
+                    "status.thresholds_unsupported",
+                    "Battery found, but charge thresholds are not supported by this hardware or kernel driver.",
+                )
+                .into();
+            return;
+        }
+
+        let writable_bats: Vec<_> = self
+            .batteries
+            .iter()
+            .filter(|b| b.threshold_support == ThresholdSupport::Writable)
+            .cloned()
+            .collect();
+
         if writable_bats.is_empty() {
             self.message = self
                 .language
                 .text(
-                    "status.thresholds_readonly",
-                    "Battery found, but its charge thresholds are not writable.",
+                    "status.thresholds_permission_denied",
+                    "Battery found, but write permission is denied. Run with sudo or configure a udev rule.",
                 )
                 .into();
             return;
@@ -443,25 +496,31 @@ impl eframe::App for BatteryHealthKeeperApp {
         // Close
         let btn_size = egui::vec2(20.0, 20.0);
         let btn_y = title_rect.min.y + (title_bar_height - btn_size.y) / 2.0;
-        let close_rect = egui::Rect::from_min_size(
-            egui::pos2(title_rect.min.x + 8.0, btn_y),
-            btn_size,
-        );
-        let close_response = ui.interact(close_rect, ui.id().with("close_btn"), egui::Sense::click());
+        let close_rect =
+            egui::Rect::from_min_size(egui::pos2(title_rect.min.x + 8.0, btn_y), btn_size);
+        let close_response =
+            ui.interact(close_rect, ui.id().with("close_btn"), egui::Sense::click());
         let close_color = if close_response.hovered() {
             egui::Color32::from_rgb(232, 50, 50)
         } else {
             egui::Color32::from_rgb(200, 60, 60)
         };
-        ui.painter().circle_filled(close_rect.center(), 8.0, close_color);
+        ui.painter()
+            .circle_filled(close_rect.center(), 8.0, close_color);
         let cx = close_rect.center();
         let d = 3.5;
         ui.painter().line_segment(
-            [egui::pos2(cx.x - d, cx.y - d), egui::pos2(cx.x + d, cx.y + d)],
+            [
+                egui::pos2(cx.x - d, cx.y - d),
+                egui::pos2(cx.x + d, cx.y + d),
+            ],
             egui::Stroke::new(1.5, egui::Color32::WHITE),
         );
         ui.painter().line_segment(
-            [egui::pos2(cx.x + d, cx.y - d), egui::pos2(cx.x - d, cx.y + d)],
+            [
+                egui::pos2(cx.x + d, cx.y - d),
+                egui::pos2(cx.x - d, cx.y + d),
+            ],
             egui::Stroke::new(1.5, egui::Color32::WHITE),
         );
         if close_response.clicked() {
@@ -469,24 +528,28 @@ impl eframe::App for BatteryHealthKeeperApp {
         }
 
         // Minimize
-        let minimize_rect = egui::Rect::from_min_size(
-            egui::pos2(close_rect.max.x + 8.0, btn_y),
-            btn_size,
+        let minimize_rect =
+            egui::Rect::from_min_size(egui::pos2(close_rect.max.x + 8.0, btn_y), btn_size);
+        let minimize_response = ui.interact(
+            minimize_rect,
+            ui.id().with("minimize_btn"),
+            egui::Sense::click(),
         );
-        let minimize_response = ui.interact(minimize_rect, ui.id().with("minimize_btn"), egui::Sense::click());
         let minimize_color = if minimize_response.hovered() {
             egui::Color32::from_rgb(230, 190, 40)
         } else {
             egui::Color32::from_rgb(200, 170, 50)
         };
-        ui.painter().circle_filled(minimize_rect.center(), 8.0, minimize_color);
+        ui.painter()
+            .circle_filled(minimize_rect.center(), 8.0, minimize_color);
         let mx = minimize_rect.center();
         ui.painter().line_segment(
             [egui::pos2(mx.x - d, mx.y), egui::pos2(mx.x + d, mx.y)],
             egui::Stroke::new(1.5, egui::Color32::WHITE),
         );
         if minimize_response.clicked() {
-            ui.ctx().send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::Minimized(true));
         }
 
         ui.painter().text(
@@ -527,10 +590,16 @@ impl eframe::App for BatteryHealthKeeperApp {
                     );
                 } else {
                     for battery in &self.batteries {
-                        let state = if battery.writable {
-                            language.text("ui.thresholds_writable", "thresholds writable")
-                        } else {
-                            language.text("ui.read_only", "read-only")
+                        let state = match battery.threshold_support {
+                            ThresholdSupport::Writable => {
+                                language.text("ui.thresholds_writable", "thresholds writable")
+                            }
+                            ThresholdSupport::ReadOnly => {
+                                language.text("ui.permission_required", "permission required")
+                            }
+                            ThresholdSupport::Unsupported => {
+                                language.text("ui.thresholds_unsupported", "not supported")
+                            }
                         };
                         let status_text = translate_battery_status(&battery.status, &language);
                         let limit_info = if let Some(thresh) = battery.current_threshold {
@@ -554,9 +623,10 @@ impl eframe::App for BatteryHealthKeeperApp {
                     let tech = battery.technology.as_deref().unwrap_or("?");
                     let mfr = battery.manufacturer.as_deref().unwrap_or("?");
                     let model = battery.model_name.as_deref().unwrap_or("?");
-                    let cycles = battery.cycle_count.map(|c| c.to_string()).unwrap_or_else(|| {
-                        language.text("ui.unavailable", "N/A").into()
-                    });
+                    let cycles = battery
+                        .cycle_count
+                        .map(|c| c.to_string())
+                        .unwrap_or_else(|| language.text("ui.unavailable", "N/A").into());
                     let name_prefix = if self.batteries.len() > 1 {
                         format!("{} — ", battery.name)
                     } else {
@@ -596,13 +666,22 @@ impl eframe::App for BatteryHealthKeeperApp {
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 ui.label("Presets:");
-                if ui.selectable_label(self.charge_limit == 60, "60%").clicked() {
+                if ui
+                    .selectable_label(self.charge_limit == 60, "60%")
+                    .clicked()
+                {
                     self.charge_limit = 60;
                 }
-                if ui.selectable_label(self.charge_limit == 80, "80%").clicked() {
+                if ui
+                    .selectable_label(self.charge_limit == 80, "80%")
+                    .clicked()
+                {
                     self.charge_limit = 80;
                 }
-                if ui.selectable_label(self.charge_limit == 100, "100%").clicked() {
+                if ui
+                    .selectable_label(self.charge_limit == 100, "100%")
+                    .clicked()
+                {
                     self.charge_limit = 100;
                 }
             });
@@ -623,10 +702,16 @@ impl eframe::App for BatteryHealthKeeperApp {
         });
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            if ui.button(language.text("button.save", "Save settings")).clicked() {
+            if ui
+                .button(language.text("button.save", "Save settings"))
+                .clicked()
+            {
                 self.save_settings();
             }
-            if ui.button(language.text("button.load", "Load settings")).clicked() {
+            if ui
+                .button(language.text("button.load", "Load settings"))
+                .clicked()
+            {
                 self.load_settings_into_app();
             }
         });
@@ -642,11 +727,15 @@ impl eframe::App for BatteryHealthKeeperApp {
                 .selected_text(&self.language.locale)
                 .show_ui(ui, |ui| {
                     for locale in &available_locales {
-                        if ui.selectable_label(self.language.locale == *locale, locale).clicked() {
+                        if ui
+                            .selectable_label(self.language.locale == *locale, locale)
+                            .clicked()
+                        {
                             self.language = Language::load_locale(locale);
                             self.message = format!(
                                 "{}: {}",
-                                self.language.text("status.language_changed", "Language changed"),
+                                self.language
+                                    .text("status.language_changed", "Language changed"),
                                 locale
                             );
                             ui.close();
@@ -685,6 +774,48 @@ fn load_settings() -> Result<Settings, String> {
 // Sysfs helpers
 // ---------------------------------------------------------------------------
 
+/// Find the upper/end charge threshold sysfs path if supported by the driver.
+/// Checks modern standard `charge_control_end_threshold`, then legacy `charge_stop_threshold`.
+fn find_end_threshold_path(root: &Path) -> Option<PathBuf> {
+    let standard = root.join("charge_control_end_threshold");
+    if standard.exists() {
+        return Some(standard);
+    }
+    let legacy = root.join("charge_stop_threshold");
+    if legacy.exists() {
+        return Some(legacy);
+    }
+    None
+}
+
+/// Find the lower/start charge threshold sysfs path if supported by the driver.
+/// Checks modern standard `charge_control_start_threshold`, then legacy `charge_start_threshold`.
+fn find_start_threshold_path(root: &Path) -> Option<PathBuf> {
+    let standard = root.join("charge_control_start_threshold");
+    if standard.exists() {
+        return Some(standard);
+    }
+    let legacy = root.join("charge_start_threshold");
+    if legacy.exists() {
+        return Some(legacy);
+    }
+    None
+}
+
+/// Check whether the threshold node is unsupported, read-only, or writable.
+fn check_threshold_support(end_path: Option<&Path>) -> ThresholdSupport {
+    let Some(path) = end_path else {
+        return ThresholdSupport::Unsupported;
+    };
+    if !path.exists() {
+        return ThresholdSupport::Unsupported;
+    }
+    match fs::OpenOptions::new().write(true).open(path) {
+        Ok(_) => ThresholdSupport::Writable,
+        Err(_) => ThresholdSupport::ReadOnly,
+    }
+}
+
 /// Enumerate batteries under `/sys/class/power_supply` (entries with `type=Battery`).
 fn discover_batteries() -> Vec<Battery> {
     let Ok(entries) = fs::read_dir("/sys/class/power_supply") else {
@@ -698,15 +829,19 @@ fn discover_batteries() -> Vec<Battery> {
             if type_name != "Battery" {
                 return None;
             }
-            // Existence of the end-threshold node means the driver supports charge limits.
-            // Actual write permission is only known when Apply is attempted.
-            let writable = root.join("charge_control_end_threshold").exists();
+            let end_threshold_path = find_end_threshold_path(&root);
+            let start_threshold_path = find_start_threshold_path(&root);
+            let threshold_support = check_threshold_support(end_threshold_path.as_deref());
+            let writable = threshold_support == ThresholdSupport::Writable;
             let mut battery = Battery {
                 name: entry.file_name().to_string_lossy().into_owned(),
                 root,
                 capacity: None,
                 status: "Unknown".into(),
                 current_threshold: None,
+                threshold_support,
+                end_threshold_path,
+                start_threshold_path,
                 writable,
                 technology: None,
                 manufacturer: None,
@@ -732,12 +867,25 @@ fn update_battery_readings(battery: &mut Battery) {
     if let Some(status) = read_trimmed(battery.root.join("status")) {
         battery.status = status;
     }
-    battery.current_threshold = read_trimmed(battery.root.join("charge_control_end_threshold"))
+    if battery.end_threshold_path.is_none() {
+        battery.end_threshold_path = find_end_threshold_path(&battery.root);
+    }
+    if battery.start_threshold_path.is_none() {
+        battery.start_threshold_path = find_start_threshold_path(&battery.root);
+    }
+    battery.threshold_support = check_threshold_support(battery.end_threshold_path.as_deref());
+    battery.writable = battery.threshold_support == ThresholdSupport::Writable;
+
+    battery.current_threshold = battery
+        .end_threshold_path
+        .as_ref()
+        .and_then(read_trimmed)
         .and_then(|v| v.parse::<u8>().ok());
     battery.technology = read_trimmed(battery.root.join("technology"));
     battery.manufacturer = read_trimmed(battery.root.join("manufacturer"));
     battery.model_name = read_trimmed(battery.root.join("model_name"));
-    battery.cycle_count = read_trimmed(battery.root.join("cycle_count")).and_then(|v| v.parse().ok());
+    battery.cycle_count =
+        read_trimmed(battery.root.join("cycle_count")).and_then(|v| v.parse().ok());
 
     // Prefer energy_* (µWh); fall back to charge_* (µAh) on some laptops.
     let energy_full = read_trimmed(battery.root.join("energy_full")).and_then(|v| v.parse().ok());
@@ -813,25 +961,38 @@ fn write_single_threshold(path: &Path, value: u8, language: &Language) -> Result
 
 /// Apply an end-of-charge limit; lower start threshold first when needed (ThinkPad-style).
 fn apply_charge_limit(battery: &Battery, limit: u8, language: &Language) -> Result<(), String> {
-    let end_path = battery.root.join("charge_control_end_threshold");
-    let start_path = battery.root.join("charge_control_start_threshold");
+    let Some(ref end_path) = battery.end_threshold_path else {
+        return Err(language
+            .text(
+                "status.thresholds_unsupported",
+                "Battery found, but charge thresholds are not supported by this hardware or kernel driver.",
+            )
+            .into());
+    };
 
     if !end_path.exists() {
-        return Err("charge_control_end_threshold not found".into());
+        return Err(language
+            .text(
+                "status.thresholds_unsupported",
+                "Battery found, but charge thresholds are not supported by this hardware or kernel driver.",
+            )
+            .into());
     }
 
     // Kernel requires start < end; otherwise writing end returns EINVAL.
-    if start_path.exists() {
-        let current_start: Option<u8> = read_trimmed(&start_path).and_then(|s| s.parse().ok());
-        if let Some(start) = current_start {
-            if start >= limit {
-                let new_start = limit.saturating_sub(5);
-                let _ = write_single_threshold(&start_path, new_start, language);
+    if let Some(ref start_path) = battery.start_threshold_path {
+        if start_path.exists() {
+            let current_start: Option<u8> = read_trimmed(start_path).and_then(|s| s.parse().ok());
+            if let Some(start) = current_start {
+                if start >= limit {
+                    let new_start = limit.saturating_sub(5);
+                    let _ = write_single_threshold(start_path, new_start, language);
+                }
             }
         }
     }
 
-    write_single_threshold(&end_path, limit, language)
+    write_single_threshold(end_path, limit, language)
 }
 
 /// Map I/O errors to localized messages (especially permission denied).
@@ -1031,6 +1192,10 @@ mod tests {
             hu.text("ui.thresholds_writable", ""),
             "írható küszöbértékek"
         );
+        assert_eq!(en.text("ui.thresholds_unsupported", ""), "not supported");
+        assert_eq!(hu.text("ui.thresholds_unsupported", ""), "nem támogatott");
+        assert_eq!(en.text("ui.permission_required", ""), "permission required");
+        assert_eq!(hu.text("ui.permission_required", ""), "engedély szükséges");
     }
 
     #[test]
@@ -1081,7 +1246,10 @@ mod tests {
 
         assert_eq!(translate_battery_status("Charging", &en), "charging");
         assert_eq!(translate_battery_status("Discharging", &en), "discharging");
-        assert_eq!(translate_battery_status("Not charging", &en), "not charging");
+        assert_eq!(
+            translate_battery_status("Not charging", &en),
+            "not charging"
+        );
         assert_eq!(translate_battery_status("Full", &en), "full");
         assert_eq!(translate_battery_status("Unknown", &en), "unknown");
 
@@ -1090,7 +1258,10 @@ mod tests {
         assert_eq!(translate_battery_status("full", &en), "full");
 
         // Unrecognised status is returned as-is
-        assert_eq!(translate_battery_status("SomeWeirdValue", &en), "SomeWeirdValue");
+        assert_eq!(
+            translate_battery_status("SomeWeirdValue", &en),
+            "SomeWeirdValue"
+        );
     }
 
     #[test]
@@ -1115,5 +1286,70 @@ mod tests {
         assert_eq!(battery_health_percent(1, 0), None);
         assert_eq!(format_micro_capacity(57_150_000, "Wh"), "57.1 Wh");
         assert_eq!(format_micro_capacity(90_060_000, "Wh"), "90.1 Wh");
+    }
+
+    #[test]
+    fn test_threshold_support_check() {
+        assert_eq!(check_threshold_support(None), ThresholdSupport::Unsupported);
+
+        let non_existent = Path::new("/nonexistent/sysfs/battery/threshold");
+        assert_eq!(
+            check_threshold_support(Some(non_existent)),
+            ThresholdSupport::Unsupported
+        );
+
+        let temp_dir = std::env::temp_dir();
+        let test_file = temp_dir.join(format!(
+            "test_battery_threshold_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::write(&test_file, "80").unwrap();
+        assert_eq!(
+            check_threshold_support(Some(&test_file)),
+            ThresholdSupport::Writable
+        );
+        let _ = fs::remove_file(&test_file);
+    }
+
+    #[test]
+    fn test_find_threshold_paths_fallback() {
+        let temp_dir = std::env::temp_dir().join(format!(
+            "test_bat_sysfs_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&temp_dir).unwrap();
+
+        // Neither exists
+        assert!(find_end_threshold_path(&temp_dir).is_none());
+        assert!(find_start_threshold_path(&temp_dir).is_none());
+
+        // Legacy exists
+        let legacy_end = temp_dir.join("charge_stop_threshold");
+        let legacy_start = temp_dir.join("charge_start_threshold");
+        fs::write(&legacy_end, "80").unwrap();
+        fs::write(&legacy_start, "40").unwrap();
+
+        assert_eq!(find_end_threshold_path(&temp_dir), Some(legacy_end.clone()));
+        assert_eq!(
+            find_start_threshold_path(&temp_dir),
+            Some(legacy_start.clone())
+        );
+
+        // Standard overrides legacy if both exist
+        let standard_end = temp_dir.join("charge_control_end_threshold");
+        let standard_start = temp_dir.join("charge_control_start_threshold");
+        fs::write(&standard_end, "80").unwrap();
+        fs::write(&standard_start, "40").unwrap();
+
+        assert_eq!(find_end_threshold_path(&temp_dir), Some(standard_end));
+        assert_eq!(find_start_threshold_path(&temp_dir), Some(standard_start));
+
+        let _ = fs::remove_dir_all(&temp_dir);
     }
 }
